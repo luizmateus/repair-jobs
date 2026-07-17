@@ -2,108 +2,79 @@
 
 A mobile repair-jobs marketplace where two roles share one app — a **Client** posts jobs, a **Pro** claims and completes them. Same app, same login, different experience based on who you are.
 
-Built with Expo (managed workflow) + TypeScript for the Mobile Take-Home challenge.
+Built with Expo SDK 56 + TypeScript + Expo Router.
+
+## Prerequisites
+
+- **Node.js** >= 18
+- **pnpm** >= 8
+- **Xcode** (iOS simulator) or **Android Studio** (Android emulator)
+- **Expo Go** app on a physical device (optional)
 
 ## Quick start
 
 ```bash
 pnpm install
-pnpm start         # launches Expo Dev Server
-# press i for iOS simulator, a for Android, w for web
+pnpm start         # Expo dev server (i = iOS, a = Android)
+pnpm test          # Jest test suite
+pnpm typecheck     # TypeScript type checking
+pnpm format        # Prettier + ESLint --fix
 ```
 
-## Scripts
-
-| Command | What it does |
-|---|---|
-| `pnpm start` | Expo dev server |
-| `pnpm test` | Jest test suite |
-| `pnpm typecheck` | TypeScript type checking |
-
-## Architecture
-
-### Domain-first
-
-The core logic lives in `src/domain/` as pure functions with no React or storage dependencies:
-
-- **`job.ts`** — the `Job` type, a three-state machine (`open → claimed → done`), and transition functions (`createJob`, `claimJob`, `completeJob`) that enforce all business rules (only open jobs can be claimed, only the assigned Pro can complete, etc.).
-- **`personas.ts`** — the two fixed demo identities (Alex the Client, Sam the Pro) and name lookups.
-
-### Source of truth
-
-DummyJSON's POST/PUT/DELETE endpoints return success but **don't persist**. So the app seeds once from the API (`GET /todos?limit=30`), maps todos → jobs, and treats the **local Zustand store** (backed by AsyncStorage) as the sole source of truth for all mutations. No write-through to the API. See [ADR-0001](docs/adr/0001-dummyjson-seed-local-source-of-truth.md).
-
-If the seed fetch fails (offline, API down), the app falls back to bundled fixtures — it's always demoable.
-
-### State management
-
-[Zustand](https://github.com/pmndrs/zustand) with the `persist` middleware + AsyncStorage. The store holds:
-
-- `session` — current role + persona (or `null` = logged out)
-- `jobs` — the shared job world
-- `hasSeeded` / `seedStatus` — seed lifecycle
-
-Jobs outlive the session: logging out or switching roles clears only the session, not the jobs. A Client-created open job is visible to the Pro, and claims/completions persist across role switches. See [ADR-0002](docs/adr/0002-shared-job-world-across-sessions.md).
-
-### Navigation
-
-Expo Router with route groups:
+## Project structure
 
 ```
 app/
-├── _layout.tsx          ← root: hydrates store, seeds, redirects by session
-├── login.tsx            ← role picker (Continue as Client / Pro)
-├── (client)/
-│   ├── index.tsx        ← my jobs list + create + logout
-│   ├── create.tsx       ← create job form
-│   └── job/[id].tsx     ← job detail (read-only for client)
-├── (pro)/
-│   ├── index.tsx        ← Available / Mine segmented list
-│   └── job/[id].tsx     ← job detail (claim / complete actions)
+├── _layout.tsx          # root layout (hydration / startup gate)
+├── index.tsx            # splash → role redirect
+├── login.tsx            # shared login screen
+├── (client)/            # Client role: _layout (auth/role guard), index,
+│   └── job/[id].tsx     #   create, job detail
+└── (pro)/               # Pro role: _layout (auth/role guard), index
+    └── job/[id].tsx     #   (browse/claimed/done), job detail
+src/
+├── features/
+│   ├── auth/        # auth store, session personas
+│   └── jobs/        # jobs store, jobUtils (state machine), components
+│                    #   (JobCard, StatusBadge, JobDetail, …), DummyJSON
+│                    #   client + mapTodoToJob (+ inline seed fixtures)
+├── shared/
+│   ├── api/         # generic fetch wrapper (timeout/abort)
+│   ├── components/  # reusable UI (Button, SegmentedControl,
+│   │                #   NetworkErrorBanner, etc.)
+│   ├── constants/   # theme, persona display names
+│   ├── hooks/       # useAppStartup, useAsyncAction
+│   ├── store/       # Zustand store helpers
+│   └── utils/       # time formatting
 ```
 
-### Pro home — segmented
+## Libraries picked and why
 
-Pro's home is one screen with an "Available" / "Mine" segmented control. Available shows all `open` jobs. Mine shows `claimed` jobs assigned to this Pro. Done jobs drop off — no history view. See [ADR-0004](docs/adr/0004-pro-home-segments.md).
+- **Expo + Expo Router v56** — the required stack. Expo Router's file-based routing and route groups (`(client)` / `(pro)`) made it natural to keep each role's screens and stack isolated while sharing the same login entry point.
+- **TypeScript** — required. Also used to encode the job state machine (`Job['status']` literal) so illegal transitions don't compile.
+- **Zustand** (with `persist` + `@react-native-async-storage/async-storage`) — lightweight, no provider boilerplate, and its `persist` middleware gave me cross-restart persistence for the session and the local job world in a few lines. Two stores: `useAuthStore` (session) and `useJobsStore` (jobs + seed flag).
+- **react-native** built-ins (`FlatList` with `RefreshControl`, `Alert`, `Pressable`) + plain `StyleSheet` with a small theme module (`shared/constants/theme.ts`). No UI kit — the surface is small enough that a hand-rolled theme keeps the bundle lean and the styling explicit. Pull-to-refresh calls `useJobsStore.resyncJobs`, which re-fetches DummyJSON and merges via `mergeJobs` so local claim/complete progress and locally-created jobs survive.
+- **jest + jest-expo + @testing-library/react-native** — tests focus on the domain layer (state machine transitions in `jobUtils`) and the stores (auth + jobs), the parts with real logic. UI components have light snapshot-free tests for the bits that branch on props (StatusBadge, JobCard, SegmentedControl, Button, InputField).
 
-### Job detail — one component, role-driven actions
+## Next up
 
-A single `JobDetail` component serves both roles. The Client sees status + assigned Pro name (read-only). The Pro sees conditional action buttons: "Claim this job" (if open), "Mark as done" (if claimed by them).
+1. **Optimistic-invalidation plumbing** — drive mutations through a proper cache layer with `onMutate`/`onError` rollback, instead of today's fire-and-forget pattern where API failures leave the UI silently out of sync.
+2. **Per-endpoint fetching** — use `GET /todos/{id}` and `/todos/user/{userId}` instead of seeding everything up front, once the dataset outgrows a one-shot list.
+3. **Accessibility pass** — `accessibilityRole`/`accessibilityLabel` on every `Pressable`, dynamic font scaling, minimum touch-target audit.
+4. **E2E with Maestro or Detox** on top of the unit/component suite, focused on role-gated navigation and the claim→complete flow.
+5. **Root error boundary** — so a render-time crash anywhere doesn't blank the whole app.
 
-## Libraries & why
+## Assumptions & shortcuts
 
-| Library | Why |
-|---|---|
-| **Expo Router** | File-based navigation with route groups for clean role separation |
-| **Zustand** | Lightweight store; `persist` middleware gives AsyncStorage persistence for free |
-| **AsyncStorage** | Persists jobs + session across app restarts |
-| **jest-expo** | Jest preset with React Native transform config out of the box |
+- **Identity is faked.** Two fixed demo personas (`CLIENT_PERSONA`, `PRO_PERSONA`) with hardcoded `userId`s drive role and assignment. "Pro names" and "client names" come from a small `PERSONA_NAMES` map; DummyJSON's `userId` is reused as the creator id for seed jobs.
+- **Local store is the source of truth.** DummyJSON's `POST`/`PUT`/`DELETE` return a valid-looking response but don't persist, so a later `GET` won't show your change. I seed once from `/todos?limit=0` into the persisted Zustand store and treat that store as the system of record thereafter. Mutations update the store synchronously and fire the API call best-effort. Pull-to-refresh merges by id and status rank (`mergeJobs`) so local claim/complete on seeded jobs and locally-created jobs survive.
+- **The "claim" notion doesn't exist in DummyJSON.** I represent an assignment by adding `assigneeId` and a `claimed` status on top of the basic todo shape, and keep it consistent via the state machine in `jobUtils.ts` (`open → claimed → done`). Illegal transitions throw `JobTransitionError`, tested in `jobUtils.test.ts`.
+- **Single shared job world, role-gated by filtering.** Both roles read the same `useJobsStore.jobs`; the Client sees `jobsByCreator(myUserId)`, the Pro sees `openJobs` / `claimedJobsForPro(myUserId)` / `doneJobsForPro(myUserId)`. No per-role siloing of data, only of views + actions.
+- **Seed/network errors are surfaced.** If `/todos` is unreachable on first seed, the app still boots against bundled fixtures and shows a retry banner (`NetworkErrorBanner`). Pull-to-refresh failures keep local jobs and show the same banner with a refresh-specific message.
+- **Switching roles keeps the jobs.** Clearing the session is a logout, not a data wipe — the job world persists and the new role sees it.
+- **Field naming divergence is intentional.** `todo` → `title`, `completed` → `status` (open/claimed/done). The brief explicitly says the exact field names don't matter; I kept the mapping in one function (`mapTodoToJob`) for clarity.
+- **DELETE endpoint unused.** DummyJSON exposes `DELETE /todos/{id}` but no role has a "delete/cancel job" action in the brief's role table, so the verb isn't wired up. With more time I'd add a Client "Cancel open job" flow that calls `fetchDeleteJob` and removes by id from the local store (mirroring the create/claim/complete pattern).
 
-Everything else (styling, components) is plain React Native — `StyleSheet` + a shared theme. No UI framework, no CSS-in-JS, no component library.
+## Demo
 
-## Testing
-
-The domain layer is fully unit-tested (`src/domain/job.test.ts`) — every transition and every guard. The store has smoke tests (`src/store/app-store.test.ts`) covering sign-in/out, create, claim, and complete. UI tests are intentionally skipped — the domain + store tests cover the logic, and the UI is reviewable by running the app.
-
-```bash
-pnpm test
-```
-
-## Decisions recorded
-
-- [ADR-0001](docs/adr/0001-dummyjson-seed-local-source-of-truth.md) — DummyJSON is seed-only; local store is source of truth
-- [ADR-0002](docs/adr/0002-shared-job-world-across-sessions.md) — Jobs outlive the session
-- [ADR-0004](docs/adr/0004-pro-home-segments.md) — Pro home uses Available / Mine segments
-
-See [CONTEXT.md](CONTEXT.md) for the domain glossary.
-
-## With more time
-
-- **Done history for Pro** — a third "Done" segment or a separate history screen
-- **Pull-to-refresh** on the job lists
-- **Optimistic UI with error rollback** — if we ever point at a real backend
-- **Offline-first with sync** — queue mutations and replay when online
-- **Multiple Pros** — let the user pick from DummyJSON's user list, show real names
-- **Job photos** — attach images to a repair request
-- **E2E tests** with Maestro or Detox
-- **Accessibility audit** — VoiceOver labels, dynamic type scaling
+https://github.com/user-attachments/assets/9ab95fb3-2b79-45b8-afbe-47d78c620fc3
