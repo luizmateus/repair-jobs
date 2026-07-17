@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Repair Jobs",
+    "slug": "repair-jobs",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "repairjobs",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.repairjobs.app"
+    },
+    "android": {
+      "package": "com.repairjobs.app"
+    },
+    "plugins": ["expo-router", "expo-system-ui", "expo-status-bar"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

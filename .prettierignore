@@ -1,0 +1,4 @@
+node_modules
+.expo
+pnpm-lock.yaml
+*.lock
